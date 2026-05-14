@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 
@@ -102,8 +103,16 @@ class HyperMixFormerBlockBi(nn.Module):
 class Pos2D(nn.Module):
     def __init__(self, dim: int, patch_size: int):
         super().__init__()
-        self.pe = nn.Parameter(torch.zeros(1, patch_size * patch_size, dim))
-        nn.init.trunc_normal_(self.pe, std=0.02)
+        P = patch_size
+        pe = torch.zeros(P * P, dim)
+        pos_r = torch.arange(P).float().unsqueeze(1).repeat(1, P).flatten()
+        pos_c = torch.arange(P).float().unsqueeze(0).repeat(P, 1).flatten()
+        div = torch.exp(torch.arange(0, dim // 2, 2).float() * -(math.log(10000.0) / (dim // 2)))
+        pe[:, 0::4] = torch.sin(pos_r.unsqueeze(1) * div)
+        pe[:, 1::4] = torch.cos(pos_r.unsqueeze(1) * div)
+        pe[:, 2::4] = torch.sin(pos_c.unsqueeze(1) * div)
+        pe[:, 3::4] = torch.cos(pos_c.unsqueeze(1) * div)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):  # x: (B, T, D)
         return x + self.pe
