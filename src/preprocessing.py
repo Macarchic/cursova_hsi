@@ -10,15 +10,23 @@ def load_dataset(name: str, data_path: str = 'data'):
         hsi = d['indian_pines_corrected']
         labels = np.load(os.path.join(data_path, 'IP', 'IPgt.npy'))
     elif name == 'PU':
-        d = scipy.io.loadmat(os.path.join(data_path, 'PaviaU.mat'))
-        g = scipy.io.loadmat(os.path.join(data_path, 'PaviaU_gt.mat'))
+        d = scipy.io.loadmat(os.path.join(data_path, 'Pavia', 'PaviaU.mat'))
+        g = scipy.io.loadmat(os.path.join(data_path, 'Pavia', 'PaviaU_gt.mat'))
         hsi, labels = d['paviaU'], g['paviaU_gt']
     elif name == 'WHHH':
-        d = scipy.io.loadmat(os.path.join(data_path, 'WHU_Hi_HongHu.mat'))
-        g = scipy.io.loadmat(os.path.join(data_path, 'WHU_Hi_HongHu_gt.mat'))
+        d = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-HongHu', 'WHU_Hi_HongHu.mat'))
+        g = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-HongHu', 'WHU_Hi_HongHu_gt.mat'))
         hsi, labels = d['WHU_Hi_HongHu'], g['WHU_Hi_HongHu_gt']
+    elif name == 'HC':
+        d = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-HanChuan', 'WHU_Hi_HanChuan.mat'))
+        g = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-HanChuan', 'WHU_Hi_HanChuan_gt.mat'))
+        hsi, labels = d['WHU_Hi_HanChuan'], g['WHU_Hi_HanChuan_gt']
+    elif name == 'LK':
+        d = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-LongKou', 'WHU_Hi_LongKou.mat'))
+        g = scipy.io.loadmat(os.path.join(data_path, 'WHU-Hi-LongKou', 'WHU_Hi_LongKou_gt.mat'))
+        hsi, labels = d['WHU_Hi_LongKou'], g['WHU_Hi_LongKou_gt']
     else:
-        raise ValueError(f'Unknown dataset: {name!r}. Available: IP, PU, WHHH')
+        raise ValueError(f'Unknown dataset: {name!r}. Available: IP, PU, WHHH, HC, LK')
     hsi = hsi.astype(np.float32)
     labels = labels.astype(np.int64)
     print(f'[{name}] HSI {hsi.shape}  Labels {labels.shape}  Labeled px: {(labels > 0).sum()}')
