@@ -3,13 +3,7 @@ import torch
 from torch.utils.data import WeightedRandomSampler, DataLoader
 
 from src.dataset import create_split, HSIPatchDataset
-
-
-class SpectralAugment:
-    def __call__(self, x):  # x: (C, H, W) float tensor
-        x = x + torch.randn_like(x) * 0.01
-        mask = torch.bernoulli(torch.ones(x.shape[0]) * 0.9)
-        return x * mask.view(-1, 1, 1)
+from src.models.improved.augmentation import build_train_transform
 
 
 def get_improved_dataloaders(hsi_pca, labels, cfg):
@@ -17,7 +11,7 @@ def get_improved_dataloaders(hsi_pca, labels, cfg):
         labels, cfg.num_train_per_class, cfg.num_val_per_class, cfg.seed)
     print(f'Split — Train: {len(train_idx)}  Val: {len(val_idx)}  Test: {len(test_idx)}')
 
-    train_ds = HSIPatchDataset(hsi_pca, labels, train_idx, cfg.patch_size, transform=SpectralAugment())
+    train_ds = HSIPatchDataset(hsi_pca, labels, train_idx, cfg.patch_size, transform=build_train_transform())
     val_ds   = HSIPatchDataset(hsi_pca, labels, val_idx,   cfg.patch_size)
     test_ds  = HSIPatchDataset(hsi_pca, labels, test_idx,  cfg.patch_size)
 
