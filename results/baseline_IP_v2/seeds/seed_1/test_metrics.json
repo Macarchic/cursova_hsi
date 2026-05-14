@@ -1,0 +1,25 @@
+{
+  "seed": 1,
+  "mode": "normal",
+  "OA": 67.55,
+  "AA": 80.3,
+  "Kappa": 0.6378,
+  "per_class": {
+    "class_1": 100.0,
+    "class_2": 58.0,
+    "class_3": 66.5,
+    "class_4": 72.5,
+    "class_5": 62.4,
+    "class_6": 87.8,
+    "class_7": 100.0,
+    "class_8": 99.8,
+    "class_9": 100.0,
+    "class_10": 73.6,
+    "class_11": 47.2,
+    "class_12": 40.3,
+    "class_13": 100.0,
+    "class_14": 90.5,
+    "class_15": 86.3,
+    "class_16": 100.0
+  }
+}

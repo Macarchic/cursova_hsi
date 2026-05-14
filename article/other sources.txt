@@ -1,0 +1,4 @@
+SSFTT — IEEE Xplore   https://ieeexplore.ieee.org/document/9684381
+Contrastive SSL for HSI — IEEE Xplore  https://ieeexplore.ieee.org/document/9734031
+Self-supervised contrastive HSI — IEEE 2023 https://ieeexplore.ieee.org/document/10314565
+Multi-view contrastive HSI — PeerJ https://peerj.com/articles/cs-3721/

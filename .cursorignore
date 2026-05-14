@@ -1,0 +1,7 @@
+.venv/
+data/
+article/
+*.ipynb
+checkpoints/
+data_explor/
+logs/
