@@ -88,23 +88,85 @@ def create_split(
     return np.array(train_idx), np.array(val_idx), np.array(test_idx)
 
 
+# ── Augmentations ─────────────────────────────────────────────────────────────
+
+class SpectralJitter:
+    """Multiply each PCA band by an independent Uniform(1-scale, 1+scale) factor."""
+    def __init__(self, scale: float = 0.1):
+        self.scale = scale
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        factor = 1.0 + (torch.rand(x.shape[0], 1, 1) * 2 - 1) * self.scale
+        return x * factor
+
+
+class BandDropout:
+    """Zero out a random fraction of PCA bands (entire spatial plane per band)."""
+    def __init__(self, p: float = 0.15):
+        self.p = p
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        mask = (torch.rand(x.shape[0], 1, 1) > self.p).float()
+        return x * mask
+
+
+class SpatialFlip:
+    """Random horizontal and/or vertical flip of the 2D patch, each with p=0.5."""
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.rand(1).item() > 0.5:
+            x = x.flip(2)
+        if torch.rand(1).item() > 0.5:
+            x = x.flip(1)
+        return x
+
+
+class PatchRotation:
+    """Random 0/90/180/270° rotation. Center pixel is invariant for square patches."""
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        k = torch.randint(0, 4, (1,)).item()
+        return torch.rot90(x, k=k, dims=[1, 2])
+
+
+class ComposeAugmentations:
+    def __init__(self, transforms: list):
+        self.transforms = transforms
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        for t in self.transforms:
+            x = t(x)
+        return x
+
+
+# ── Dataset ───────────────────────────────────────────────────────────────────
+
 class HSIPatchDataset(Dataset):
-    def __init__(self, hsi_pca: np.ndarray, labels: np.ndarray, indices: np.ndarray, patch_size: int):
+    def __init__(
+        self,
+        hsi_pca:    np.ndarray,
+        labels:     np.ndarray,
+        indices:    np.ndarray,
+        patch_size: int,
+        augment=None,
+    ):
         pad = patch_size // 2
-        self.labels = labels
+        self.labels  = labels
         self.indices = indices
-        self.pad = pad
-        self.hsi = np.pad(hsi_pca, ((pad, pad), (pad, pad), (0, 0)), mode='reflect')
+        self.pad     = pad
+        self.hsi     = np.pad(hsi_pca, ((pad, pad), (pad, pad), (0, 0)), mode='reflect')
+        self.augment = augment
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        r, c = self.indices[idx]
-        label = int(self.labels[r, c]) - 1
+        r, c   = self.indices[idx]
+        label  = int(self.labels[r, c]) - 1
         rp, cp = r + self.pad, c + self.pad
-        patch = self.hsi[rp - self.pad:rp + self.pad + 1, cp - self.pad:cp + self.pad + 1, :]
-        patch = torch.from_numpy(patch.copy()).permute(2, 0, 1)
+        patch  = self.hsi[rp - self.pad:rp + self.pad + 1,
+                          cp - self.pad:cp + self.pad + 1, :]
+        patch  = torch.from_numpy(patch.copy()).permute(2, 0, 1).float()
+        if self.augment is not None:
+            patch = self.augment(patch)
         return patch, torch.tensor(label, dtype=torch.long)
 
 
@@ -119,7 +181,16 @@ def get_dataloaders(hsi_pca: np.ndarray, labels: np.ndarray, cfg):
     )
     print(f'Split — Train: {len(train_idx)}  Val: {len(val_idx)}  Test: {len(test_idx)}')
 
-    train_ds = HSIPatchDataset(hsi_pca, labels, train_idx, cfg.patch_size)
+    train_aug = None
+    if getattr(cfg, 'use_augmentation', True):
+        train_aug = ComposeAugmentations([
+            SpectralJitter(scale=0.1),
+            BandDropout(p=0.15),
+            SpatialFlip(),
+            PatchRotation(),
+        ])
+
+    train_ds = HSIPatchDataset(hsi_pca, labels, train_idx, cfg.patch_size, augment=train_aug)
     val_ds   = HSIPatchDataset(hsi_pca, labels, val_idx,   cfg.patch_size)
     test_ds  = HSIPatchDataset(hsi_pca, labels, test_idx,  cfg.patch_size)
 

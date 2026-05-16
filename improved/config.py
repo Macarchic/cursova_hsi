@@ -24,6 +24,8 @@ class Config:
     num_train_per_class: int = 10
     num_val_per_class: int = 5
     seed: int = 42
+    use_fps: bool = True
+    use_augmentation: bool = True
 
 
 CONFIGS = {
