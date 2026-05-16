@@ -38,9 +38,9 @@ def parse_args():
     p = argparse.ArgumentParser(description='Train an HSI model')
     p.add_argument('--model',     required=True, help='Model name (e.g. baseline, improved)')
     p.add_argument('--dataset',   required=True, help='Dataset name: IP | PU | WHHH')
-    p.add_argument('--epochs',    type=int,   default=None)
-    p.add_argument('--lr',        type=float, default=None)
-    p.add_argument('--patience',  type=int,   default=None)
+    p.add_argument('--epochs',    type=int,   default=100)
+    p.add_argument('--lr',        type=float, default=0.0001)
+    p.add_argument('--patience',  type=int,   default=20)
     p.add_argument('--seeds',     type=int,   nargs='+', default=[42],
                    help='One or more random seeds, e.g. --seeds 0 1 2 3 4')
     p.add_argument('--log_every', type=int,   default=1,  help='Print interval (epochs)')
