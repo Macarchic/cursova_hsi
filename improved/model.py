@@ -252,7 +252,7 @@ class TCFormerLit(L.LightningModule):
         super().__init__()
         self.cfg       = cfg
         self.model     = TCFormer(cfg)
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         self._val_preds:    list = []
         self._val_trues:    list = []
         self._val_losses:   list = []
