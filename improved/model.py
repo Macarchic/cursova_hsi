@@ -312,4 +312,8 @@ class TCFormerLit(L.LightningModule):
         self._val_losses.clear()
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+        opt = torch.optim.Adam(self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=self.cfg.epochs, eta_min=self.cfg.lr * 0.1
+        )
+        return [opt], [{'scheduler': sched, 'interval': 'epoch'}]
