@@ -27,6 +27,7 @@ class Config:
     use_fps: bool = True
     use_augmentation: bool = True
     use_bidirectional_wkv: bool = True
+    use_pos_encoding: bool = True
 
 
 CONFIGS = {

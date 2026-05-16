@@ -62,6 +62,26 @@ class WKVOperator(nn.Module):
         return (A + euk * v) / (B_den + euk + 1e-8)
 
 
+class SinCos2DPositionalEncoding(nn.Module):
+    """Non-learned 2D sin-cos PE registered as a buffer (moves with model.to(device)).
+    Zero trainable parameters. Requires dim % 4 == 0."""
+
+    def __init__(self, dim: int, patch_size: int):
+        super().__init__()
+        assert dim % 4 == 0, 'hidden_dim must be divisible by 4 for 2D sincos PE'
+        P, d    = patch_size, dim // 4
+        freq    = 1.0 / (10000 ** (torch.arange(d).float() / d))
+        i_idx   = torch.arange(P).repeat_interleave(P)   # row index per token
+        j_idx   = torch.arange(P).repeat(P)              # col index per token
+        ri      = i_idx.unsqueeze(1) * freq.unsqueeze(0) # (P*P, d)
+        cj      = j_idx.unsqueeze(1) * freq.unsqueeze(0)
+        pe      = torch.stack([ri.sin(), ri.cos(), cj.sin(), cj.cos()], dim=-1)
+        self.register_buffer('pe', pe.reshape(P * P, dim).unsqueeze(0))  # (1, T, D)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.pe
+
+
 class BidirectionalWKVOperator(nn.Module):
     """Two independent WKV passes (forward L→R and backward R→L) fused via learned projection.
     Each direction has its own w_log and u parameters."""
@@ -253,6 +273,10 @@ class TCFormer(nn.Module):
             nn.BatchNorm2d(D),
             nn.ReLU(inplace=True),
         )
+        self.pos_enc = (
+            SinCos2DPositionalEncoding(D, cfg.patch_size)
+            if getattr(cfg, 'use_pos_encoding', True) else None
+        )
         self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads, bidirectional=bi)  for _ in range(cfg.depth)])
         self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads, bidirectional=bi) for _ in range(cfg.depth)])
         self.center_attn  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
@@ -260,6 +284,8 @@ class TCFormer(nn.Module):
 
     def forward(self, x):
         x = self.stem(x).flatten(2).transpose(1, 2)
+        if self.pos_enc is not None:
+            x = self.pos_enc(x)
         for block in self.time_blocks:
             x = block(x)
         for block in self.hyper_blocks:
