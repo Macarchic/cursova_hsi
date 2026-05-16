@@ -28,6 +28,8 @@ class Config:
     use_augmentation: bool = True
     use_bidirectional_wkv: bool = True
     use_pos_encoding: bool = True
+    use_multiscale_stem: bool = True
+    use_se_block: bool = True
 
 
 CONFIGS = {

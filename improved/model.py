@@ -62,6 +62,46 @@ class WKVOperator(nn.Module):
         return (A + euk * v) / (B_den + euk + 1e-8)
 
 
+class MultiScaleStem(nn.Module):
+    """Three parallel Conv2D branches (kernels: 3, 5, kernel_size), outputs summed.
+    Fixed small kernels avoid parameter explosion with large PCA channel counts."""
+
+    def __init__(self, in_ch: int, out_ch: int, kernel_size: int):
+        super().__init__()
+
+        def branch(k):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, k, padding=k // 2, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            )
+
+        self.small  = branch(3)
+        self.medium = branch(5)
+        self.large  = branch(kernel_size)   # as per paper config table
+
+    def forward(self, x):
+        return self.small(x) + self.medium(x) + self.large(x)
+
+
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation: reweight D feature channels based on global context."""
+
+    def __init__(self, dim: int, reduction: int = 4):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(dim, dim // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(dim // reduction, dim, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):           # x: (B, D, H, W)
+        s = x.mean(dim=[2, 3])      # global avg pool → (B, D)
+        s = self.fc(s).unsqueeze(-1).unsqueeze(-1)
+        return x * s
+
+
 class SinCos2DPositionalEncoding(nn.Module):
     """Non-learned 2D sin-cos PE registered as a buffer (moves with model.to(device)).
     Zero trainable parameters. Requires dim % 4 == 0."""
@@ -265,14 +305,18 @@ class TCFormer(nn.Module):
         super().__init__()
         D  = cfg.hidden_dim
         bi = getattr(cfg, 'use_bidirectional_wkv', False)
-        self.stem = nn.Sequential(
-            nn.Conv2d(cfg.pca_components, D,
-                      kernel_size=cfg.kernel_size,
-                      padding=cfg.kernel_size // 2,
-                      bias=False),
-            nn.BatchNorm2d(D),
-            nn.ReLU(inplace=True),
-        )
+        if getattr(cfg, 'use_multiscale_stem', True):
+            self.stem = MultiScaleStem(cfg.pca_components, D, cfg.kernel_size)
+        else:
+            self.stem = nn.Sequential(
+                nn.Conv2d(cfg.pca_components, D,
+                          kernel_size=cfg.kernel_size,
+                          padding=cfg.kernel_size // 2,
+                          bias=False),
+                nn.BatchNorm2d(D),
+                nn.ReLU(inplace=True),
+            )
+        self.se = SEBlock(D) if getattr(cfg, 'use_se_block', True) else None
         self.pos_enc = (
             SinCos2DPositionalEncoding(D, cfg.patch_size)
             if getattr(cfg, 'use_pos_encoding', True) else None
@@ -283,7 +327,10 @@ class TCFormer(nn.Module):
         self.head         = MLPHead(D, cfg.num_classes, cfg.dropout)
 
     def forward(self, x):
-        x = self.stem(x).flatten(2).transpose(1, 2)
+        x = self.stem(x)
+        if self.se is not None:
+            x = self.se(x)
+        x = x.flatten(2).transpose(1, 2)
         if self.pos_enc is not None:
             x = self.pos_enc(x)
         for block in self.time_blocks:
