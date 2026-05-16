@@ -305,17 +305,14 @@ class TCFormer(nn.Module):
         super().__init__()
         D  = cfg.hidden_dim
         bi = getattr(cfg, 'use_bidirectional_wkv', False)
-        if getattr(cfg, 'use_multiscale_stem', True):
-            self.stem = MultiScaleStem(cfg.pca_components, D, cfg.kernel_size)
-        else:
-            self.stem = nn.Sequential(
-                nn.Conv2d(cfg.pca_components, D,
-                          kernel_size=cfg.kernel_size,
-                          padding=cfg.kernel_size // 2,
-                          bias=False),
-                nn.BatchNorm2d(D),
-                nn.ReLU(inplace=True),
-            )
+        self.stem = nn.Sequential(
+            nn.Conv2d(cfg.pca_components, D,
+                      kernel_size=cfg.kernel_size,
+                      padding=cfg.kernel_size // 2,
+                      bias=False),
+            nn.BatchNorm2d(D),
+            nn.ReLU(inplace=True),
+        )
         self.se = SEBlock(D) if getattr(cfg, 'use_se_block', True) else None
         self.pos_enc = (
             SinCos2DPositionalEncoding(D, cfg.patch_size)
