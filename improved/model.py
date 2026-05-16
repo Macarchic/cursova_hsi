@@ -252,34 +252,64 @@ class HyperMixFormerBlock(nn.Module):
         return x
 
 
-class CenterAttention(nn.Module):
-    """Center pixel as Q, all patch tokens as K/V → single (B, D) vector."""
+class MultiRingCenterAttention(nn.Module):
+    """Center pixel as Q, attending separately to Ring1 (8 immediate neighbors)
+    and Ring2 (all remaining tokens). Outputs fused via learned projection.
+
+    Replaces original CenterAttention — same interface, richer spatial hierarchy."""
 
     def __init__(self, dim: int, patch_size: int, num_heads: int = 1):
         super().__init__()
         assert dim % num_heads == 0
-        self.H          = num_heads
-        self.D          = dim // num_heads
-        self.scale      = self.D ** -0.5
-        self.center_idx = (patch_size // 2) * patch_size + (patch_size // 2)
+        self.H     = num_heads
+        self.D     = dim // num_heads
+        self.scale = self.D ** -0.5
+
+        P = patch_size
+        cy, cx = P // 2, P // 2
+        self.center_idx = cy * P + cx
+
+        ring1 = [
+            (cy + di) * P + (cx + dj)
+            for di in (-1, 0, 1) for dj in (-1, 0, 1)
+            if not (di == 0 and dj == 0)
+        ]
+        ring2 = [i for i in range(P * P) if i != self.center_idx and i not in ring1]
+
+        self.register_buffer('ring1_idx', torch.tensor(ring1))
+        self.register_buffer('ring2_idx', torch.tensor(ring2))
+
         self.norm    = nn.LayerNorm(dim)
         self.q_proj  = nn.Linear(dim, dim,     bias=False)
         self.kv_proj = nn.Linear(dim, 2 * dim, bias=False)
+        self.merge   = nn.Linear(2 * dim, dim, bias=False)  # fuse two ring outputs
         self.proj    = nn.Linear(dim, dim,     bias=False)
+
+        with torch.no_grad():
+            self.merge.weight.copy_(0.5 * torch.eye(dim).repeat(1, 2))
+
+    def _ring_attn(self, q, k, v, idx):
+        """Attend from center Q to a subset of K/V tokens defined by idx."""
+        B   = q.shape[0]
+        n   = idx.shape[0]
+        k_r = k[:, idx].reshape(B, n, self.H, self.D).transpose(1, 2)  # (B,H,n,Dh)
+        v_r = v[:, idx].reshape(B, n, self.H, self.D).transpose(1, 2)
+        attn = (q @ k_r.transpose(-2, -1)) * self.scale                 # (B,H,1,n)
+        return (attn.softmax(dim=-1) @ v_r).transpose(1, 2).reshape(B, 1, self.H * self.D)
 
     def forward(self, x):
         B, T, C = x.shape
         xn     = self.norm(x)
-        center = xn[:, self.center_idx].unsqueeze(1)
+        center = xn[:, self.center_idx].unsqueeze(1)                     # (B,1,D)
 
         q    = self.q_proj(center).reshape(B, 1, self.H, self.D).transpose(1, 2)
-        k, v = self.kv_proj(xn).chunk(2, dim=-1)
-        k    = k.reshape(B, T, self.H, self.D).transpose(1, 2)
-        v    = v.reshape(B, T, self.H, self.D).transpose(1, 2)
+        k, v = self.kv_proj(xn).chunk(2, dim=-1)                        # (B,T,D) each
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        out  = (attn.softmax(dim=-1) @ v).transpose(1, 2).reshape(B, 1, C)
-        return self.proj(out).squeeze(1) + x[:, self.center_idx]
+        out_r1 = self._ring_attn(q, k, v, self.ring1_idx)               # (B,1,D)
+        out_r2 = self._ring_attn(q, k, v, self.ring2_idx)               # (B,1,D)
+
+        fused = self.merge(torch.cat([out_r1, out_r2], dim=-1)).squeeze(1)  # (B,D)
+        return self.proj(fused) + x[:, self.center_idx]
 
 
 class MLPHead(nn.Module):
@@ -320,7 +350,7 @@ class TCFormer(nn.Module):
         )
         self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads, bidirectional=bi)  for _ in range(cfg.depth)])
         self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads, bidirectional=bi) for _ in range(cfg.depth)])
-        self.center_attn  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
+        self.center_attn  = MultiRingCenterAttention(D, cfg.patch_size, cfg.num_heads)
         self.head         = MLPHead(D, cfg.num_classes, cfg.dropout)
 
     def forward(self, x):
