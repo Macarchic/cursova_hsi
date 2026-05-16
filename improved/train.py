@@ -1,10 +1,10 @@
 """
-Train TC-Former (baseline) on HSI datasets.
+Train TC-Former (improved) on HSI datasets.
 
 Usage:
-    python -m baseline.train --dataset IP
-    python -m baseline.train --dataset PU --paper_mode
-    python -m baseline.train --dataset WHHH --seeds 0 1 2 3 4 --paper_mode
+    python -m improved.train --dataset IP
+    python -m improved.train --dataset PU --paper_mode
+    python -m improved.train --dataset WHHH --seeds 0 1 2 3 4 --paper_mode
 """
 
 import argparse
@@ -20,11 +20,11 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
 
-from baseline.config import CONFIGS
+from improved.config import CONFIGS
 from baseline.preprocessing import load_dataset, apply_pca
-from baseline.dataset import get_dataloaders
+from improved.dataset import get_dataloaders
 from baseline.utils import compute_metrics, evaluate, get_run_dir, get_seed_dir, detect_accelerator
-from baseline.model import TCFormerLit, EpochLogger
+from improved.model import TCFormerLit, EpochLogger
 
 
 _PAPER_FILE = Path(__file__).parent / 'paper_targets.json'
@@ -181,7 +181,7 @@ def main():
         cfg.num_val_per_class = 0
 
     suffix  = '_paper' if args.paper_mode else ''
-    run_dir = get_run_dir(f'baseline{suffix}_{args.dataset}', results_root=args.results)
+    run_dir = get_run_dir(f'improved{suffix}_{args.dataset}', results_root=args.results)
     print(f'\nRun directory: {run_dir}')
     with open(run_dir / 'config.json', 'w') as f:
         json.dump(dataclasses.asdict(cfg), f, indent=2, ensure_ascii=False)
@@ -201,7 +201,7 @@ def main():
         json.dump(agg, f, indent=2, ensure_ascii=False)
 
     n = len(args.seeds)
-    print(f'\n=== Aggregated [{args.dataset}] — baseline ({n} seed(s)) ===')
+    print(f'\n=== Aggregated [{args.dataset}] — improved ({n} seed(s)) ===')
     print(f'OA    : {agg["OA"]}')
     print(f'AA    : {agg["AA"]}')
     print(f'Kappa : {agg["Kappa"]}')
