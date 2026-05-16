@@ -26,6 +26,7 @@ class Config:
     seed: int = 42
     use_fps: bool = True
     use_augmentation: bool = True
+    use_bidirectional_wkv: bool = True
 
 
 CONFIGS = {

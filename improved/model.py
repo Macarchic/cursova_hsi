@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 import lightning as L
 
-from baseline.config import Config
-from baseline.utils import compute_metrics
+from improved.config import Config
+from improved.utils import compute_metrics
 
 
 # ── Lightning callbacks ────────────────────────────────────────────────────────
@@ -62,10 +62,29 @@ class WKVOperator(nn.Module):
         return (A + euk * v) / (B_den + euk + 1e-8)
 
 
+class BidirectionalWKVOperator(nn.Module):
+    """Two independent WKV passes (forward L→R and backward R→L) fused via learned projection.
+    Each direction has its own w_log and u parameters."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.wkv_fwd = WKVOperator(dim)
+        self.wkv_bwd = WKVOperator(dim)
+        self.merge   = nn.Linear(2 * dim, dim, bias=False)
+        # Init: treat both directions equally at the start
+        with torch.no_grad():
+            self.merge.weight.copy_(0.5 * torch.eye(dim).repeat(1, 2))
+
+    def forward(self, k, v):
+        fwd = self.wkv_fwd(k, v)
+        bwd = self.wkv_bwd(k.flip(1), v.flip(1)).flip(1)
+        return self.merge(torch.cat([fwd, bwd], dim=-1))
+
+
 class TimeMixing(nn.Module):
     """Eq. 2-4, 6: time shift + element-wise WR/WK/WV + WKV + sigmoid gate."""
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, wkv_cls=WKVOperator):
         super().__init__()
         self.mu_r = nn.Parameter(torch.full((1, 1, dim), 0.5))
         self.mu_k = nn.Parameter(torch.full((1, 1, dim), 0.5))
@@ -74,7 +93,7 @@ class TimeMixing(nn.Module):
         self.W_k  = nn.Parameter(torch.ones(1, 1, dim))
         self.W_v  = nn.Parameter(torch.ones(1, 1, dim))
         self.W_o  = nn.Linear(dim, dim, bias=False)
-        self.wkv  = WKVOperator(dim)
+        self.wkv  = wkv_cls(dim)
 
     @staticmethod
     def _shift(x):
@@ -91,7 +110,7 @@ class TimeMixing(nn.Module):
 class HyperMixing(nn.Module):
     """Eq. 8-10: linear projections W'R/W'K + WKV + Mish + sigmoid gate."""
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, wkv_cls=WKVOperator):
         super().__init__()
         self.mu_r = nn.Parameter(torch.full((1, 1, dim), 0.5))
         self.mu_k = nn.Parameter(torch.full((1, 1, dim), 0.5))
@@ -99,7 +118,7 @@ class HyperMixing(nn.Module):
         self.W_k  = nn.Linear(dim, dim, bias=False)
         self.W_h  = nn.Linear(dim, dim, bias=False)
         self.mish = nn.Mish()
-        self.wkv  = WKVOperator(dim)
+        self.wkv  = wkv_cls(dim)
 
     @staticmethod
     def _shift(x):
@@ -137,12 +156,13 @@ class TinyAttention(nn.Module):
 class TimeMixFormerBlock(nn.Module):
     """Two TimeMixing layers (separate weights) + TinyAttention, each with residual + LayerNorm."""
 
-    def __init__(self, dim: int, num_heads: int = 1):
+    def __init__(self, dim: int, num_heads: int = 1, bidirectional: bool = False):
         super().__init__()
+        WKV = BidirectionalWKVOperator if bidirectional else WKVOperator
         self.norm1 = nn.LayerNorm(dim)
-        self.tm1   = TimeMixing(dim)
+        self.tm1   = TimeMixing(dim, WKV)
         self.norm2 = nn.LayerNorm(dim)
-        self.tm2   = TimeMixing(dim)
+        self.tm2   = TimeMixing(dim, WKV)
         self.norm3 = nn.LayerNorm(dim)
         self.attn  = TinyAttention(dim, num_heads)
 
@@ -156,12 +176,13 @@ class TimeMixFormerBlock(nn.Module):
 class HyperMixFormerBlock(nn.Module):
     """HyperMixing called twice with shared weights + TinyAttention."""
 
-    def __init__(self, dim: int, num_heads: int = 1):
+    def __init__(self, dim: int, num_heads: int = 1, bidirectional: bool = False):
         super().__init__()
+        WKV = BidirectionalWKVOperator if bidirectional else WKVOperator
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
-        self.hm    = HyperMixing(dim)
+        self.hm    = HyperMixing(dim, WKV)
         self.attn  = TinyAttention(dim, num_heads)
 
     def forward(self, x):
@@ -222,7 +243,8 @@ class TCFormer(nn.Module):
 
     def __init__(self, cfg: Config):
         super().__init__()
-        D = cfg.hidden_dim
+        D  = cfg.hidden_dim
+        bi = getattr(cfg, 'use_bidirectional_wkv', False)
         self.stem = nn.Sequential(
             nn.Conv2d(cfg.pca_components, D,
                       kernel_size=cfg.kernel_size,
@@ -231,8 +253,8 @@ class TCFormer(nn.Module):
             nn.BatchNorm2d(D),
             nn.ReLU(inplace=True),
         )
-        self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads)  for _ in range(cfg.depth)])
-        self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads) for _ in range(cfg.depth)])
+        self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads, bidirectional=bi)  for _ in range(cfg.depth)])
+        self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads, bidirectional=bi) for _ in range(cfg.depth)])
         self.center_attn  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
         self.head         = MLPHead(D, cfg.num_classes, cfg.dropout)
 
