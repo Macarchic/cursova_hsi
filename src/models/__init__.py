@@ -1,18 +1,10 @@
 from src.models.baseline import config as _baseline_cfg
 from src.models.baseline import model as _baseline_model
-from src.models.improved import config as _improved_cfg
-from src.models.improved.model import TCFormerImprovedLit
-from src.models.improved.data import get_improved_dataloaders
 
 MODEL_REGISTRY = {
     'baseline': {
         'configs': _baseline_cfg.CONFIGS,
         'lit_cls': _baseline_model.TCFormerLit,
-    },
-    'improved': {
-        'configs':         _improved_cfg.CONFIGS,
-        'lit_cls':         TCFormerImprovedLit,
-        'get_dataloaders': get_improved_dataloaders,
     },
 }
 

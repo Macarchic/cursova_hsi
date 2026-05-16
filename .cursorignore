@@ -5,3 +5,8 @@ article/
 checkpoints/
 data_explor/
 logs/
+*.pyc
+results/
+*.md
+*.docx
+*.pdf

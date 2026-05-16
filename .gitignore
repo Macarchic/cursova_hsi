@@ -1,0 +1,7 @@
+*.pyc
+*.cpython-311.pyc
+*.json
+*.csv
+data/
+results/
+.venv/

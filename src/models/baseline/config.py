@@ -17,7 +17,7 @@ class Config:
     num_heads: int = 1
     dropout: float = 0.1
     depth: int = 2
-    lr: float = 1e-3          # paper Section 3.3; use --lr 0.0005 to match Table 2
+    lr: float = 5e-4          # Table 2
     epochs: int = 100
     weight_decay: float = 1e-4
     patience: int = 20

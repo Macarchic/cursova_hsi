@@ -71,8 +71,8 @@ class HyperMixing(nn.Module):
         super().__init__()
         self.mu_r = nn.Parameter(torch.full((1, 1, dim), 0.5))
         self.mu_k = nn.Parameter(torch.full((1, 1, dim), 0.5))
-        self.W_r  = nn.Parameter(torch.ones(1, 1, dim))
-        self.W_k  = nn.Parameter(torch.ones(1, 1, dim))
+        self.W_r  = nn.Linear(dim, dim, bias=False)
+        self.W_k  = nn.Linear(dim, dim, bias=False)
         self.W_h  = nn.Linear(dim, dim, bias=False)
         self.mish = nn.Mish()
         self.wkv  = WKVOperator(dim)
@@ -83,8 +83,8 @@ class HyperMixing(nn.Module):
 
     def forward(self, x):
         p = self._shift(x)
-        r = self.W_r * (self.mu_r * x + (1 - self.mu_r) * p)
-        k = self.W_k * (self.mu_k * x + (1 - self.mu_k) * p)
+        r = self.W_r(self.mu_r * x + (1 - self.mu_r) * p)
+        k = self.W_k(self.mu_k * x + (1 - self.mu_k) * p)
         v_prime = self.wkv(k, x)
         return torch.sigmoid(r) * self.W_h(self.mish(k) * v_prime)
 
