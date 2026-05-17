@@ -1,7 +1,6 @@
 import numpy as np
-from torch.utils.data import DataLoader, ConcatDataset
-
 import torch
+from torch.utils.data import DataLoader, ConcatDataset
 
 from improved.dataset import HSIPatchDataset, create_split, \
     SpectralJitter, SpatialFlip, PatchRotation
@@ -17,7 +16,6 @@ class _SpectralShift:
 
 
 class _RandomApply:
-    """Apply each transform independently with probability p."""
     def __init__(self, transforms: list, p: float = 0.5):
         self.transforms = transforms
         self.p = p
@@ -30,20 +28,19 @@ class _RandomApply:
 
 
 def get_semi_dataloaders(
-    hsi_pca:      np.ndarray,
-    labels:       np.ndarray,
-    train_idx:    np.ndarray,
-    val_idx:      np.ndarray,
-    test_idx:     np.ndarray,
-    pseudo_idx:   np.ndarray,
-    pseudo_cls:   np.ndarray,
+    hsi_pca:    np.ndarray,
+    labels:     np.ndarray,
+    train_idx:  np.ndarray,
+    test_idx:   np.ndarray,
+    pseudo_idx: np.ndarray,
+    pseudo_cls: np.ndarray,
     cfg,
 ):
     """Build dataloaders for one semi-supervised round.
 
-    train_loader — GT pixels + accumulated pseudo-labeled, with augmentation
-    val_loader   — GT val pixels, no augmentation, used for early stopping
-    test_loader  — remaining GT pixels, no augmentation, evaluation only
+    train_loader — GT train + accumulated pseudo-labeled pixels, with augmentation
+    test_loader  — full fixed test set, GT labels, no augmentation
+                   used both as eval monitor during fine-tuning and final evaluation
     """
     aug = _RandomApply([
         _SpectralShift(max_shift=5),
@@ -64,21 +61,21 @@ def get_semi_dataloaders(
     else:
         train_ds = real_ds
 
-    val_ds  = HSIPatchDataset(hsi_pca, labels, val_idx,  cfg.patch_size)
     test_ds = HSIPatchDataset(hsi_pca, labels, test_idx, cfg.patch_size)
 
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=0)
-    val_loader   = DataLoader(val_ds,   batch_size=cfg.batch_size, shuffle=False, num_workers=0)
     test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=0)
-    return train_loader, val_loader, test_loader
+    return train_loader, test_loader
 
 
 def split_for_semi(labels, hsi_pca, cfg):
-    return create_split(
+    """Returns (train_idx, test_idx). Val is empty (num_val_per_class=0)."""
+    train_idx, _, test_idx = create_split(
         labels,
         hsi_pca=hsi_pca,
         n_train_per_class=cfg.num_train_per_class,
-        n_val_per_class=cfg.num_val_per_class,
+        n_val_per_class=0,
         seed=cfg.seed,
         use_fps=getattr(cfg, 'use_fps', True),
     )
+    return train_idx, test_idx
