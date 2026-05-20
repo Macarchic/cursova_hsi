@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+from improved.preprocessing import pca_class_outlier_mask
+
 
 def _fps_indices(vectors: np.ndarray, k: int, outlier_std: float = 2.5) -> np.ndarray:
     """Farthest Point Sampling with outlier pre-filtering.
@@ -17,15 +19,12 @@ def _fps_indices(vectors: np.ndarray, k: int, outlier_std: float = 2.5) -> np.nd
     if n <= k:
         return np.arange(n)
 
-    # --- outlier filtering ---
-    centroid = vectors.mean(axis=0)
-    d = np.linalg.norm(vectors - centroid, axis=1)          # (n,) distances to centroid
-    threshold = d.mean() + outlier_std * d.std()
-    inlier_mask = d <= threshold
-    inlier_idx = np.where(inlier_mask)[0]                   # original indices of inliers
+    # --- outlier filtering (same criterion as remove_pca_outliers) ---
+    inlier_idx = np.where(~pca_class_outlier_mask(vectors, outlier_std))[0]
     if len(inlier_idx) < k:                                  # safety: too aggressive → use all
         inlier_idx = np.arange(n)
     vecs = vectors[inlier_idx]                               # (m, C)
+    centroid = vectors.mean(axis=0)
 
     # --- FPS on inliers, seeded from centroid-nearest sample ---
     d_to_centroid = np.linalg.norm(vecs - centroid, axis=1)

@@ -33,3 +33,41 @@ def apply_pca(hsi: np.ndarray, n_components: int):
     out = pca.fit_transform(flat).reshape(H, W, n_components).astype(np.float32)
     print(f'PCA {C} -> {n_components}  explained variance: {pca.explained_variance_ratio_.sum():.3f}')
     return out, pca
+
+
+def pca_class_outlier_mask(vectors: np.ndarray, outlier_std: float = 2.5) -> np.ndarray:
+    """Per-class PCA outlier mask: True where L2 to centroid > mean + outlier_std * std."""
+    centroid = vectors.mean(axis=0)
+    d = np.linalg.norm(vectors - centroid, axis=1)
+    threshold = d.mean() + outlier_std * d.std()
+    return d > threshold
+
+
+def remove_pca_outliers(
+    labels: np.ndarray,
+    hsi_pca: np.ndarray,
+    outlier_std: float = 2.5,
+) -> np.ndarray:
+    """Drop PCA outliers from the labeled set by setting their labels to 0 (background)."""
+    labels_out = labels.copy()
+    n_labeled_before = int((labels > 0).sum())
+    n_removed = 0
+
+    for cls in range(1, int(labels.max()) + 1):
+        pos = np.argwhere(labels == cls)
+        if len(pos) == 0:
+            continue
+        vectors = hsi_pca[pos[:, 0], pos[:, 1]]
+        out_local = pca_class_outlier_mask(vectors, outlier_std)
+        if out_local.any():
+            out_pos = pos[out_local]
+            labels_out[out_pos[:, 0], out_pos[:, 1]] = 0
+            n_removed += int(out_local.sum())
+
+    n_labeled_after = int((labels_out > 0).sum())
+    pct = 100 * n_removed / n_labeled_before if n_labeled_before else 0.0
+    print(
+        f'PCA outlier removal (>{outlier_std}σ): {n_removed} px -> background '
+        f'({pct:.1f}% of labeled)  |  labeled: {n_labeled_before} -> {n_labeled_after}'
+    )
+    return labels_out

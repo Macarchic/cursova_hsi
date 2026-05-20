@@ -22,6 +22,7 @@ from lightning.pytorch.loggers import CSVLogger
 
 from improved.config import CONFIGS
 from baseline.preprocessing import load_dataset, apply_pca
+from improved.preprocessing import remove_pca_outliers
 from improved.dataset import get_dataloaders
 from baseline.utils import compute_metrics, evaluate, get_run_dir, get_seed_dir, detect_accelerator
 from improved.model import TCFormerLit, EpochLogger
@@ -190,6 +191,8 @@ def main():
 
     hsi, labels = load_dataset(cfg.dataset, cfg.data_path)
     hsi_pca, _  = apply_pca(hsi, cfg.pca_components)
+    if cfg.remove_pca_outliers:
+        labels = remove_pca_outliers(labels, hsi_pca, cfg.outlier_std)
 
     seed_results = []
     for seed in args.seeds:

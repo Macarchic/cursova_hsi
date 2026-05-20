@@ -25,6 +25,8 @@ class Config:
     num_val_per_class: int = 5
     seed: int = 42
     use_fps: bool = True
+    remove_pca_outliers: bool = True
+    outlier_std: float = 2.5
     use_augmentation: bool = True
     use_bidirectional_wkv: bool = True
     use_pos_encoding: bool = True

@@ -33,3 +33,5 @@ def apply_pca(hsi: np.ndarray, n_components: int):
     out = pca.fit_transform(flat).reshape(H, W, n_components).astype(np.float32)
     print(f'PCA {C} -> {n_components}  explained variance: {pca.explained_variance_ratio_.sum():.3f}')
     return out, pca
+
+
