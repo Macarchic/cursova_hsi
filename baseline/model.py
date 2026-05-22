@@ -217,8 +217,21 @@ class MLPHead(nn.Module):
         return self.net(x)
 
 
+class FusionBlock(nn.Module):
+    """Aggregate center-pixel embeddings from dual paths via concat + linear projection."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.proj = nn.Linear(2 * dim, dim, bias=False)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x_tm: torch.Tensor, x_hm: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.proj(torch.cat([x_tm, x_hm], dim=-1)))
+
+
 class TCFormer(nn.Module):
-    """PCA → Conv2D stem → TimeMixFormer×depth → HyperMixFormer×depth → CenterAttention → MLPHead."""
+    """Dual-path TC-Former (paper Fig. 1a):
+    Conv2D stem → [TimeMixFormer×depth ∥ HyperMixFormer×depth] → CenterAttn×2 → Fusion → MLPHead."""
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -231,18 +244,28 @@ class TCFormer(nn.Module):
             nn.BatchNorm2d(D),
             nn.ReLU(inplace=True),
         )
-        self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads)  for _ in range(cfg.depth)])
-        self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads) for _ in range(cfg.depth)])
-        self.center_attn  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
-        self.head         = MLPHead(D, cfg.num_classes, cfg.dropout)
+        self.time_blocks     = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads)  for _ in range(cfg.depth)])
+        self.hyper_blocks    = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads) for _ in range(cfg.depth)])
+        self.center_attn_tm  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
+        self.center_attn_hm  = CenterAttention(D, cfg.patch_size, cfg.num_heads)
+        self.fusion          = FusionBlock(D)
+        self.head            = MLPHead(D, cfg.num_classes, cfg.dropout)
 
     def forward(self, x):
-        x = self.stem(x).flatten(2).transpose(1, 2)
+        x = self.stem(x).flatten(2).transpose(1, 2)   # (B, T, D)
+
+        x_tm = x
         for block in self.time_blocks:
-            x = block(x)
+            x_tm = block(x_tm)
+
+        x_hm = x
         for block in self.hyper_blocks:
-            x = block(x)
-        return self.head(self.center_attn(x))
+            x_hm = block(x_hm)
+
+        center_tm = self.center_attn_tm(x_tm)   # (B, D)
+        center_hm = self.center_attn_hm(x_hm)   # (B, D)
+
+        return self.head(self.fusion(center_tm, center_hm))
 
 
 # ── Lightning wrapper ─────────────────────────────────────────────────────────

@@ -214,41 +214,40 @@ class TinyAttention(nn.Module):
 
 
 class TimeMixFormerBlock(nn.Module):
-    """Two TimeMixing layers (separate weights) + TinyAttention, each with residual + LayerNorm."""
+    """LayerNorm → TimeMixing(TimeMixing(x)) → residual → TinyAttention.
+    Single LN + shared-weight ×2 call + single residual matches paper Fig. (b)."""
 
     def __init__(self, dim: int, num_heads: int = 1, bidirectional: bool = False):
         super().__init__()
         WKV = BidirectionalWKVOperator if bidirectional else WKVOperator
         self.norm1 = nn.LayerNorm(dim)
-        self.tm1   = TimeMixing(dim, WKV)
+        self.tm    = TimeMixing(dim, WKV)   # shared weights, called ×2 sequentially
         self.norm2 = nn.LayerNorm(dim)
-        self.tm2   = TimeMixing(dim, WKV)
-        self.norm3 = nn.LayerNorm(dim)
         self.attn  = TinyAttention(dim, num_heads)
 
     def forward(self, x):
-        x = x + self.tm1(self.norm1(x))
-        x = x + self.tm2(self.norm2(x))
-        x = x + self.attn(self.norm3(x))
+        xn = self.norm1(x)
+        x = x + self.tm(self.tm(xn))       # single LN, ×2 sequential, single residual
+        x = x + self.attn(self.norm2(x))
         return x
 
 
 class HyperMixFormerBlock(nn.Module):
-    """HyperMixing called twice with shared weights + TinyAttention."""
+    """LayerNorm → HyperMixing(HyperMixing(x)) → residual → TinyAttention.
+    Single LN + shared-weight ×2 call + single residual matches paper Fig. (c)."""
 
     def __init__(self, dim: int, num_heads: int = 1, bidirectional: bool = False):
         super().__init__()
         WKV = BidirectionalWKVOperator if bidirectional else WKVOperator
         self.norm1 = nn.LayerNorm(dim)
+        self.hm    = HyperMixing(dim, WKV)  # shared weights, called ×2 sequentially
         self.norm2 = nn.LayerNorm(dim)
-        self.norm3 = nn.LayerNorm(dim)
-        self.hm    = HyperMixing(dim, WKV)
         self.attn  = TinyAttention(dim, num_heads)
 
     def forward(self, x):
-        x = x + self.hm(self.norm1(x))
-        x = x + self.hm(self.norm2(x))
-        x = x + self.attn(self.norm3(x))
+        xn = self.norm1(x)
+        x = x + self.hm(self.hm(xn))        # single LN, ×2 sequential, single residual
+        x = x + self.attn(self.norm2(x))
         return x
 
 
@@ -328,8 +327,26 @@ class MLPHead(nn.Module):
         return self.net(x)
 
 
+class FusionBlock(nn.Module):
+    """Aggregate multi-level center-pixel embeddings from dual paths via concat + linear projection."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.proj = nn.Linear(2 * dim, dim, bias=False)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x_tm: torch.Tensor, x_hm: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.proj(torch.cat([x_tm, x_hm], dim=-1)))
+
+
 class TCFormer(nn.Module):
-    """PCA → Conv2D stem → TimeMixFormer×depth → HyperMixFormer×depth → CenterAttention → MLPHead."""
+    """Dual-path TC-Former (paper Fig. 1a):
+    Conv2D stem → [TimeMixFormer×depth ∥ HyperMixFormer×depth] → CenterAttn×2 → Fusion → MLPHead.
+
+    Both paths receive the same stem output. Independent CenterAttention extracts the
+    center-pixel embedding from each path. FusionBlock concatenates and projects them
+    before the MLP classifier.
+    """
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -348,23 +365,34 @@ class TCFormer(nn.Module):
             SinCos2DPositionalEncoding(D, cfg.patch_size)
             if getattr(cfg, 'use_pos_encoding', True) else None
         )
-        self.time_blocks  = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads, bidirectional=bi)  for _ in range(cfg.depth)])
-        self.hyper_blocks = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads, bidirectional=bi) for _ in range(cfg.depth)])
-        self.center_attn  = MultiRingCenterAttention(D, cfg.patch_size, cfg.num_heads)
-        self.head         = MLPHead(D, cfg.num_classes, cfg.dropout)
+        self.time_blocks       = nn.ModuleList([TimeMixFormerBlock(D, cfg.num_heads, bidirectional=bi)  for _ in range(cfg.depth)])
+        self.hyper_blocks      = nn.ModuleList([HyperMixFormerBlock(D, cfg.num_heads, bidirectional=bi) for _ in range(cfg.depth)])
+        self.center_attn_tm   = MultiRingCenterAttention(D, cfg.patch_size, cfg.num_heads)
+        self.center_attn_hm   = MultiRingCenterAttention(D, cfg.patch_size, cfg.num_heads)
+        self.fusion            = FusionBlock(D)
+        self.head              = MLPHead(D, cfg.num_classes, cfg.dropout)
 
     def forward(self, x):
         x = self.stem(x)
         if self.se is not None:
             x = self.se(x)
-        x = x.flatten(2).transpose(1, 2)
+        x = x.flatten(2).transpose(1, 2)   # (B, T, D)
         if self.pos_enc is not None:
             x = self.pos_enc(x)
+
+        # Dual parallel paths from the same stem output
+        x_tm = x
         for block in self.time_blocks:
-            x = block(x)
+            x_tm = block(x_tm)
+
+        x_hm = x
         for block in self.hyper_blocks:
-            x = block(x)
-        return self.head(self.center_attn(x))
+            x_hm = block(x_hm)
+
+        center_tm = self.center_attn_tm(x_tm)   # (B, D)
+        center_hm = self.center_attn_hm(x_hm)   # (B, D)
+
+        return self.head(self.fusion(center_tm, center_hm))
 
 
 # ── Lightning wrapper ─────────────────────────────────────────────────────────

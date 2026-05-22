@@ -177,6 +177,7 @@ def get_dataloaders(hsi_pca: np.ndarray, labels: np.ndarray, cfg):
         n_val_per_class=cfg.num_val_per_class,
         seed=cfg.seed,
         use_fps=getattr(cfg, 'use_fps', True),
+        outlier_std=getattr(cfg, 'outlier_std', 2.5),
     )
     print(f'Split — Train: {len(train_idx)}  Val: {len(val_idx)}  Test: {len(test_idx)}')
 
