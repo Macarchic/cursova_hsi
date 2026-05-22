@@ -1,6 +1,5 @@
 *.pyc
 *.cpython-311.pyc
-*.csv
 data/
 results/
 .venv/
