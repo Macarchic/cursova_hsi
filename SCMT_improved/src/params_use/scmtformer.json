@@ -29,7 +29,8 @@
         "tiny_head": 64,
         "center_attention": true,
         "center_heads": 8,
-        "pos_encoding": true
+        "pos_encoding": true,
+        "se_block": true
     },
     "train": {
         "epochs": 100,

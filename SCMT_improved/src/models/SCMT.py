@@ -201,6 +201,28 @@ class TinyAttn(nn.Module):
 
         return out
 
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation: перезважує D канали ознак за глобальним контекстом.
+
+    global avg pool -> 2-шаровий bottleneck -> sigmoid-гейт -> помножити канали.
+    Вчиться підсилювати інформативні спектральні ознаки й гасити шумні.
+    Портовано з improved/model.py.
+    """
+
+    def __init__(self, dim, reduction=4):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(dim, dim // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(dim // reduction, dim, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):           # x: (B, D, H, W)
+        s = x.mean(dim=[2, 3])      # global avg pool -> (B, D)
+        s = self.fc(s).unsqueeze(-1).unsqueeze(-1)
+        return x * s
+
 class SinCos2DPositionalEncoding(nn.Module):
     """Фіксоване 2D sin-cos позиційне кодування (0 навчальних параметрів).
 
@@ -346,6 +368,13 @@ class SCMT(nn.Module):
         else:
             self.center_attention = None
 
+        # ── SE-block (Squeeze-and-Excitation) ──────────────────────────────
+        use_se_block = net_params.get("se_block", True)
+        if use_se_block:
+            self.se = SEBlock(conv2d_out)   # dim=64, reduction=4 -> 64//4=16
+        else:
+            self.se = None
+
         # ── 2D positional encoding ─────────────────────────────────────────
         use_pos_encoding = net_params.get("pos_encoding", True)
         if use_pos_encoding:
@@ -374,6 +403,8 @@ class SCMT(nn.Module):
     def encoder_block(self, x):
         x_pixel = x
         x_pixel = self.conv2d_features(x_pixel)
+        if self.se is not None:
+            x_pixel = self.se(x_pixel)
         x_pixel = rearrange(x_pixel, 'b s w h -> b (w h) s')
         if self.pos_enc is not None:
             x_pixel = self.pos_enc(x_pixel)
