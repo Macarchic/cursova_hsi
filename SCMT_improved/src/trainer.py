@@ -1,6 +1,6 @@
 from models import SCMT as SQSFormer
 import utils
-from models.SCMT import former, Init, _weights_init
+from models.SCMT import Init
 from utils import recorder
 from evaluation import HSIEvaluation
 from utils import device
@@ -92,8 +92,11 @@ class SCMTTrainer(object):
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            # 一定epoch下进行一次eval
-            if test_loader and (epoch + 1) % 201 == 0:
+            # In-training eval: інтервал конфігурований (eval_interval).
+            # Раніше було жорстко % 201 при epochs=100 -> ніколи не спрацьовувало.
+            # 0 (default) = вимкнено, щоб не сповільнювати навчання.
+            eval_interval = self.train_params.get('eval_interval', 0)
+            if test_loader and eval_interval and (epoch + 1) % eval_interval == 0:
                 print("开始测试")
                 y_pred_test, y_test = self.test(test_loader, save_to_excel=False)
                 temp_res = self.evalator.eval(y_test, y_pred_test)
@@ -129,8 +132,10 @@ class SCMTTrainer(object):
         for inputs, labels in test_loader:
             inputs = inputs.to(self.device)
             outputs = self.get_logits(self.net(inputs))
-            if len(outputs.shape) == 1:
-                continue
+            # Раніше batch з одним зразком (1D-вихід) мовчки пропускався (continue),
+            # що викидало зразки з фінальної оцінки. Тепер повертаємо йому вимір батча.
+            if outputs.dim() == 1:
+                outputs = outputs.unsqueeze(0)
             outputs = np.argmax(outputs.detach().cpu().numpy(), axis=1)
             labels = labels.cpu().numpy()
             if count == 0:

@@ -83,6 +83,10 @@ class TimeMixFormer(nn.Module):
         self.time_gamma = nn.Parameter(torch.ones(self.ctx_len, 1))
         # 时间位移操作
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
+        # Вхідна проєкція dim->128 (зареєстрований шар, а не випадковий у forward).
+        # Раніше nn.Linear створювався на кожному forward з випадковими вагами і
+        # ніколи не тренувався — тепер це звичайний параметр моделі.
+        self.in_proj = nn.Linear(params.get('dim', 64), 128)
         # 定义线性层
         self.key = nn.Linear(128, 64)
         self.value = nn.Linear(128, 64)
@@ -98,7 +102,7 @@ class TimeMixFormer(nn.Module):
         B, T, C = x.size()
         TT = self.ctx_len
         if x.shape[-1] != 128:
-            x = nn.Linear(x.shape[-1], 128).to(device)(x)
+            x = self.in_proj(x)
         # 构造时间权重矩阵
         w = F.pad(self.time_w, (0, TT))
         w = torch.tile(w, [TT])
@@ -139,6 +143,8 @@ class ChannelMixFormer(nn.Module):
         hidden_sz = 5 * params.get('n_ffn') // 2
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
         input_dim = 256
+        # Вхідна проєкція dim->256 (зареєстрований шар замість випадкового у forward).
+        self.in_proj = nn.Linear(params.get('dim', 64), input_dim)
         self.key = nn.Linear(input_dim, hidden_sz)
         self.value = nn.Linear(input_dim, hidden_sz)
         self.receptance = nn.Linear(input_dim, params.get('n_embd'))
@@ -151,7 +157,7 @@ class ChannelMixFormer(nn.Module):
         # 时间位移操作
         x = torch.cat([self.time_shift(x[:, :, :C // 2]), x[:, :, C // 2:]], dim=2)
         if x.shape[-1] != self.key.in_features:
-            x = nn.Linear(x.shape[-1], self.key.in_features).to(device)(x)
+            x = self.in_proj(x)
         # 计算 key、value 和 receptance
         k = self.key(x)
         v = self.value(x)
@@ -313,25 +319,28 @@ class former(nn.Module):
     def __init__(self, dim, depth,  params, heads, dim_heads, mlp_dim, dropout):
         super(former, self).__init__()
         self.layers = nn.ModuleList([])
-        self.tiny_attn = TinyAttn(params)
-        self.channel_mix = ChannelMixFormer(params['net'])
-        self.time_mix = TimeMixFormer(params['net'])
+        # Кожен шар depth отримує ВЛАСНІ інстанси (раніше всі шари ділили одні
+        # й ті самі time_mix/channel_mix/tiny_attn — тобто dep>1 не давав нових
+        # ваг). Тепер це справжній стек трансформера з незалежними параметрами.
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                LayerNormalize(dim, Residual(self.time_mix)),
-                LayerNormalize(dim,Residual(self.channel_mix)),
+                LayerNormalize(dim, Residual(TimeMixFormer(params['net']))),
+                TinyAttn(params),
+                LayerNormalize(dim, Residual(ChannelMixFormer(params['net']))),
+                TinyAttn(params),
             ]))
     def forward(self, x):
         x_center_attention = []
-        for time_mix,channel_mix in self.layers:
+        for time_mix, attn1, channel_mix, attn2 in self.layers:
             mask = torch.ones(x.shape[0], x.shape[1], dtype=torch.float32).to(device)
-            x = time_mix(time_mix(x))
-            x = self.tiny_attn(x, mask)
-            x = channel_mix(channel_mix(x))
-            x = self.tiny_attn(x, mask)
+            # Кожен блок застосовується ОДИН раз (раніше було f(f(x)) — подвоєння).
+            x = time_mix(x)
+            x = attn1(x, mask)
+            x = channel_mix(x)
+            x = attn2(x, mask)
             index = int(x.shape[1] // 2)
             x_center_attention.append(x[:, index, :])
-        return x,x_center_attention
+        return x, x_center_attention
 
 class SCMT(nn.Module):
     def __init__(self, params):
@@ -354,7 +363,6 @@ class SCMT(nn.Module):
         dim_heads = dim
 
         self.local_trans_pixel = former(dim, depth, params, heads, dim_heads, mlp_dim, dropout)
-        self.center_weight = nn.Parameter(torch.ones(depth, 1, 1) * 0.001)
 
         # ── Center Attention (Multi-Ring) ──────────────────────────────────
         # Сітка токенів після conv2d менша за patch_size (stride 1):
@@ -392,9 +400,12 @@ class SCMT(nn.Module):
         torch.nn.init.normal_(self.mlp_head.bias, std=1e-6)
         self.dropout = nn.Dropout(0.1)
         linear_dim = dim * 2
+        # LayerNorm замість BatchNorm1d: не залежить від розміру батча (BatchNorm1d
+        # падає на batch=1 у train і дає ненадійні running-stats на 160 зразках),
+        # тож класифікатор стабільний і в train, і в eval незалежно від батча.
         self.classifier_mlp = nn.Sequential(
             nn.Linear(dim, linear_dim),
-            nn.BatchNorm1d(linear_dim),
+            nn.LayerNorm(linear_dim),
             nn.Dropout(0.1),
             nn.ReLU(),
             nn.Linear(linear_dim, num_classes),
@@ -416,14 +427,9 @@ class SCMT(nn.Module):
             logit_x = x_center_list[-1]
         reduce_x = torch.mean(x_pixel, dim=1)
         return logit_x, reduce_x
-    def forward(self, x, left=None, right=None):
+    def forward(self, x):
         '''
         x: (batch, s, w, h), s=spectral, w=weigth, h=height
-
         '''
         logit_x, _ = self.encoder_block(x)
-        mean_left, mean_right = None, None
-        if left is not None and right is not None:
-            _, mean_left = self.encoder_block(left)
-            _, mean_right = self.encoder_block(right)
         return self.classifier_mlp(logit_x)
