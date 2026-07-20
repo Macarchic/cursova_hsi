@@ -201,6 +201,30 @@ class TinyAttn(nn.Module):
 
         return out
 
+class SinCos2DPositionalEncoding(nn.Module):
+    """Фіксоване 2D sin-cos позиційне кодування (0 навчальних параметрів).
+
+    Дає токенам просторову структуру патча, якої в SCMT немає взагалі
+    (RWKV має лише неявний порядок, tiny-attention permutation-invariant).
+    Будується по сітці токенів ПІСЛЯ conv2d (grid_side), не по patch_size.
+    Портовано з improved/model.py. Вимога: dim % 4 == 0.
+    """
+
+    def __init__(self, dim, grid_side):
+        super().__init__()
+        assert dim % 4 == 0, 'dim must be divisible by 4 for 2D sincos PE'
+        P, d = grid_side, dim // 4
+        freq = 1.0 / (10000 ** (torch.arange(d).float() / d))
+        i_idx = torch.arange(P).repeat_interleave(P)   # індекс рядка на токен
+        j_idx = torch.arange(P).repeat(P)              # індекс стовпця на токен
+        ri = i_idx.unsqueeze(1) * freq.unsqueeze(0)    # (P*P, d)
+        cj = j_idx.unsqueeze(1) * freq.unsqueeze(0)
+        pe = torch.stack([ri.sin(), ri.cos(), cj.sin(), cj.cos()], dim=-1)
+        self.register_buffer('pe', pe.reshape(P * P, dim).unsqueeze(0))  # (1, T, dim)
+
+    def forward(self, x):
+        return x + self.pe
+
 class MultiRingCenterAttention(nn.Module):
     """Center Attention (найважливіший блок статті), варіант Multi-Ring.
 
@@ -321,6 +345,13 @@ class SCMT(nn.Module):
             self.center_attention = MultiRingCenterAttention(dim, grid_side, center_heads)
         else:
             self.center_attention = None
+
+        # ── 2D positional encoding ─────────────────────────────────────────
+        use_pos_encoding = net_params.get("pos_encoding", True)
+        if use_pos_encoding:
+            self.pos_enc = SinCos2DPositionalEncoding(dim, grid_side)
+        else:
+            self.pos_enc = None
         self.conv2d_features = nn.Sequential(
             nn.Conv2d(in_channels=self.spectral_size, out_channels=conv2d_out, kernel_size=(kernal, kernal),
                       padding=(padding, padding)),
@@ -344,6 +375,8 @@ class SCMT(nn.Module):
         x_pixel = x
         x_pixel = self.conv2d_features(x_pixel)
         x_pixel = rearrange(x_pixel, 'b s w h -> b (w h) s')
+        if self.pos_enc is not None:
+            x_pixel = self.pos_enc(x_pixel)
         x_pixel = self.dropout(x_pixel)
         x_pixel, x_center_list = self.local_trans_pixel(x_pixel)
         if self.center_attention is not None:
