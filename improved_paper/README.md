@@ -43,11 +43,30 @@ python -m improved_paper.train --dataset PU --seeds 0 1 2 --paper_mode
 | `--scmt-split` | Тренування на **фіксованому спліті авторів SCMT** (`Indian_10_1_split.mat`: `input` 220 каналів, маски `TR`/`TE`) + SCMT-препроцесинг (max-min норма + `PCA(whiten=True)`). Дає дані 1:1 з авторами для чесного порівняння. **Лише IP.** Шлях: `--scmt-split-path` (дефолт `SCMT/data/Indian/Indian_10_1_split.mat`). |
 | `--final-eval-only` | SCMT-стиль: **без валідації щоепохи**, тест міряється **один раз у кінці** на моделі фінальної епохи. Швидко (немає eval на ~10k патчів щоепохи). |
 
-Максимальна парність з авторами SCMT:
+Максимальна парність **даних** з авторами SCMT:
 ```bash
 python -m improved_paper.train --dataset IP --scmt-split --final-eval-only
 ```
-(той самий спліт + той самий препроцесинг + фінальна модель на тесті). Порівнюй з `SCMT/` при вимкнених покращеннях, щоб ізолювати внесок моделі.
+(той самий спліт + той самий препроцесинг + фінальна модель на тесті).
+
+## Запуск повністю як SCMT (`--emulate-scmt`)
+
+Щоб `improved_paper` поводився як оригінальний SCMT (дані + модель + гіперпараметри) — одна команда:
+```bash
+python -m improved_paper.train --dataset IP --emulate-scmt
+```
+Вона вмикає: `--scmt-split` + `--final-eval-only`, базову SCMT-модель (`mixing=scmt`, `center=plain`, усі improved-шари вимкнені), без трюків (`aug/fps/outliers` off, `label_smoothing=0`, без cosine), і SCMT-гіперпараметри `weight_decay=0`, `grad_clip=15`. Окремі прапорці після `--emulate-scmt` мають пріоритет (напр. `--emulate-scmt --center ring` увімкне лише ring-attention поверх SCMT-бази).
+
+Розгорнутий еквівалент:
+```bash
+python -m improved_paper.train --dataset IP --scmt-split --final-eval-only \
+  --mixing scmt --center plain --no-se-block --no-pos-encoding --no-bidirectional \
+  --no-augmentation --label-smoothing 0 --no-cosine --weight-decay 0 --grad-clip 15
+```
+
+Додаткові оверайди: `--weight-decay FLOAT`, `--grad-clip FLOAT`.
+
+> Залишкова відмінність: оригінальний SCMT робив легкі геометричні аугментації (random flip/transpose); у `--emulate-scmt` аугментації вимкнено (навмисно, для чистоти). Також `mixing=scmt` відтворює оригінальний код разом із його баґом (невивчений runtime-Linear) — це очікувано, бо ми емулюємо саме оригінал.
 
 ## Крайні конфігурації
 

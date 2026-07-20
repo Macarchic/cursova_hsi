@@ -51,6 +51,8 @@ class Config:
     label_smoothing: float = 0.05       # 0.0 disables
     use_cosine_schedule: bool = True
 
+    grad_clip: float = 0.0              # gradient-norm clip value (0 = disabled; SCMT uses 15)
+
     # ── Run-mode bookkeeping (recorded in config.json; no effect on the model) ──
     use_scmt_split: bool = False        # train on SCMT authors' fixed TR/TE split
     final_eval_only: bool = False       # SCMT-style: no per-epoch val, test once at end

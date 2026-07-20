@@ -69,6 +69,14 @@ def parse_args():
                    help='Path to the SCMT split .mat (input/TR/TE)')
     p.add_argument('--final-eval-only', dest='final_eval_only', action='store_true',
                    help='SCMT-style: no per-epoch validation, evaluate on test once at the end (final-epoch model)')
+    p.add_argument('--emulate-scmt', dest='emulate_scmt', action='store_true',
+                   help='Run exactly like the original SCMT: fixed split + SCMT preprocessing, '
+                        'base SCMT model (all improved layers off), no tricks, wd=0, grad-clip=15, '
+                        'final-eval-only. Implies --scmt-split (IP only).')
+    p.add_argument('--weight-decay', dest='weight_decay', type=float, default=None,
+                   help='Override Adam weight_decay (SCMT uses 0)')
+    p.add_argument('--grad-clip', dest='grad_clip', type=float, default=None,
+                   help='Gradient-norm clip value (SCMT uses 15; 0 disables)')
 
     # ── Ablation toggles (point-wise disable of each new layer/trick) ──────────
     g = p.add_argument_group('ablation toggles')
@@ -91,6 +99,24 @@ def parse_args():
 
 def apply_overrides(cfg, args):
     """Apply CLI overrides onto the dataclass config (None = leave default)."""
+    # SCMT-emulation profile applied first, so explicit flags below can still override it.
+    if args.emulate_scmt:
+        cfg.mixing_impl = 'scmt'
+        cfg.center_attn = 'plain'
+        cfg.use_multiscale_stem = False
+        cfg.use_se_block = False
+        cfg.use_pos_encoding = False
+        cfg.use_bidirectional_wkv = False
+        cfg.use_augmentation = False
+        cfg.use_fps = False
+        cfg.remove_pca_outliers = False
+        cfg.label_smoothing = 0.0
+        cfg.use_cosine_schedule = False
+        cfg.weight_decay = 0.0
+        cfg.grad_clip = 15.0
+        args.scmt_split = True
+        args.final_eval_only = True
+
     if args.epochs   is not None: cfg.epochs   = args.epochs
     if args.lr       is not None: cfg.lr       = args.lr
     if args.patience is not None: cfg.patience = args.patience
@@ -100,6 +126,9 @@ def apply_overrides(cfg, args):
 
     cfg.use_scmt_split  = args.scmt_split
     cfg.final_eval_only = args.final_eval_only
+
+    if args.weight_decay is not None: cfg.weight_decay = args.weight_decay
+    if args.grad_clip    is not None: cfg.grad_clip    = args.grad_clip
 
     if args.mixing          is not None: cfg.mixing_impl           = args.mixing
     if args.center          is not None: cfg.center_attn           = args.center
@@ -142,6 +171,9 @@ def train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels, fixed_split=None):
         enable_model_summary=False,
         num_sanity_val_steps=0,
     )
+    if getattr(cfg, 'grad_clip', 0.0) and cfg.grad_clip > 0:
+        common_trainer_kwargs['gradient_clip_val'] = cfg.grad_clip
+        common_trainer_kwargs['gradient_clip_algorithm'] = 'norm'
 
     if args.final_eval_only:
         # SCMT-style: no per-epoch validation; evaluate final-epoch model on test once.
@@ -274,6 +306,7 @@ def main():
           f'multiscale={cfg.use_multiscale_stem} se={cfg.use_se_block} pos={cfg.use_pos_encoding} '
           f'biwkv={cfg.use_bidirectional_wkv} fps={cfg.use_fps} aug={cfg.use_augmentation} '
           f'outliers={cfg.remove_pca_outliers} ls={cfg.label_smoothing} cosine={cfg.use_cosine_schedule} '
+          f'wd={cfg.weight_decay} grad_clip={cfg.grad_clip} '
           f'scmt_split={cfg.use_scmt_split} final_eval_only={cfg.final_eval_only}')
 
     fixed_split = None
