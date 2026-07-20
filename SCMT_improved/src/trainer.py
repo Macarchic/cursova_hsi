@@ -22,6 +22,7 @@ class SCMTTrainer(object):
         self.net = None
         self.criterion = None
         self.optimizer = None
+        self.scheduler = None
         self.clip = 15
         self.real_init()
 
@@ -31,13 +32,22 @@ class SCMTTrainer(object):
         self.net = SQSFormer.SCMT(self.params).to(self.device)
         Init(self.net)
 
-        # 初始化损失函数
-        self.criterion = nn.CrossEntropyLoss()  # 交叉熵损失函数
+        # 初始化损失函数 (+ label smoothing для регуляризації при 10 зразках/клас)
+        label_smoothing = self.train_params.get('label_smoothing', 0.05)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
         # 初始化优化器
         self.lr = self.train_params.get('lr', 0.001)
         self.weight_decay = self.train_params.get('weight_decay', 5e-3)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        # Cosine annealing LR: плавне зниження lr -> lr*0.1 для кращого фінального збігу
+        epochs = self.train_params.get('epochs', 100)
+        if self.train_params.get('cosine_lr', True):
+            self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=epochs, eta_min=self.lr * 0.1)
+        else:
+            self.scheduler = None
 
     def get_loss(self, outputs, target):
         """计算损失函数。如果 outputs 是元组（例如包含多个输出），默认使用第一个输出计算损失。"""
@@ -78,6 +88,9 @@ class SCMTTrainer(object):
                 epoch_avg_loss.get_avg(),
                 total_loss / (epoch + 1),
                 loss.item(), epoch_avg_loss.get_num()))
+
+            if self.scheduler is not None:
+                self.scheduler.step()
 
             # 一定epoch下进行一次eval
             if test_loader and (epoch + 1) % 201 == 0:
