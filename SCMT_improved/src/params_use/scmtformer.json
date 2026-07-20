@@ -1,0 +1,39 @@
+{
+    "data": {
+        "data_sign": "Indian",
+        "data_file": "Indian_10_1",
+        "patch_size": 15,
+        "batch_size": 200,
+        "num_classes": 16,
+        "pca": 150,
+        "dim_heads": 64,
+        "spectral_size": 150
+    },
+    "net": {
+        "trainer": "scmtformer",
+        "use_mask": true,
+        "depth": 2,
+        "dim": 64,
+        "mlp_dim": 256,
+        "heads": 24,
+        "kernal": 9,
+        "padding": 1,
+        "n_head": 64,
+        "ctx_len": 361,
+        "n_attn": 64,
+        "head_size": 320,
+        "n_embd": 128,
+        "n_embd1": 512,
+        "n_ffn": 64,
+        "tiny_attn": 512,
+        "tiny_head": 64,
+        "center_attention": true,
+        "center_heads": 8
+    },
+    "train": {
+        "epochs": 100,
+        "lr": 0.0005,
+        "weight_decay": 0
+    },
+    "uniq_name": "Indian_test"
+}
