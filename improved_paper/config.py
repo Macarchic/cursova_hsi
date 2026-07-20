@@ -51,6 +51,10 @@ class Config:
     label_smoothing: float = 0.05       # 0.0 disables
     use_cosine_schedule: bool = True
 
+    # ── Run-mode bookkeeping (recorded in config.json; no effect on the model) ──
+    use_scmt_split: bool = False        # train on SCMT authors' fixed TR/TE split
+    final_eval_only: bool = False       # SCMT-style: no per-epoch val, test once at end
+
 
 CONFIGS = {
     'IP':   Config(dataset='IP',   patch_size=15, pca_components=150, kernel_size=9,  num_classes=16, batch_size=200),

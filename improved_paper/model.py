@@ -28,14 +28,29 @@ from improved_paper.layers_scmt import former, Init
 # ── Lightning progress callback ────────────────────────────────────────────────
 
 class EpochLogger(L.Callback):
-    def __init__(self, log_every: int = 1):
+    def __init__(self, log_every: int = 1, train_only: bool = False):
         self.log_every = log_every
+        self.train_only = train_only  # print at train-epoch end when there is no validation
 
     def on_train_epoch_start(self, trainer, pl_module):
         ep = trainer.current_epoch + 1
         print(f'  Ep {ep:3d}/{trainer.max_epochs} ({ep / trainer.max_epochs:3.0%}) ...', end='', flush=True)
 
+    def on_train_epoch_end(self, trainer, pl_module):
+        if not self.train_only:
+            return
+        epoch = trainer.current_epoch + 1
+        if epoch % self.log_every != 0 and epoch != 1:
+            print()
+            return
+        print(
+            f'\r  Ep {epoch:3d}/{trainer.max_epochs} ({epoch / trainer.max_epochs:3.0%})'
+            f'  train: loss={pl_module._log_train_loss:.4f}  acc={pl_module._log_train_acc:.1%}'
+        )
+
     def on_validation_epoch_end(self, trainer, pl_module):
+        if self.train_only:
+            return
         epoch = trainer.current_epoch + 1
         if epoch % self.log_every != 0 and epoch != 1:
             print()

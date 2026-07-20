@@ -25,6 +25,40 @@ def load_dataset(name: str, data_path: str = 'data'):
     return hsi, labels
 
 
+def load_split_dataset(path: str):
+    """Load the SCMT authors' fixed split file (e.g. Indian_10_1_split.mat).
+
+    Returns hsi (H,W,C), labels (=TR+TE), TR, TE — the exact train/test masks
+    used by the original SCMT paper pipeline.
+    """
+    d = scipy.io.loadmat(path)
+    hsi = d['input'].astype(np.float32)
+    TR = d['TR'].astype(np.int64)
+    TE = d['TE'].astype(np.int64)
+    labels = (TR + TE).astype(np.int64)
+    print(f'[SCMT split] {path}')
+    print(f'  HSI {hsi.shape}  train px (TR>0): {(TR > 0).sum()}  test px (TE>0): {(TE > 0).sum()}')
+    return hsi, labels, TR, TE
+
+
+def preprocess_scmt(hsi: np.ndarray, n_components: int):
+    """SCMT-style preprocessing: per-band max-min normalization -> PCA(whiten=True).
+
+    Mirrors SCMT/src/PCA.py::data_preprocessing (norm_type='max_min') + applyPCA."""
+    H, W, C = hsi.shape
+    norm = np.zeros_like(hsi, dtype=np.float32)
+    for i in range(C):
+        band = hsi[:, :, i]
+        b_min, b_max = band.min(), band.max()
+        denom = (b_max - b_min) if (b_max - b_min) != 0 else 1.0
+        norm[:, :, i] = (band - b_min) / denom
+    flat = norm.reshape(-1, C)
+    pca = PCA(n_components=n_components, whiten=True, random_state=42)
+    out = pca.fit_transform(flat).reshape(H, W, n_components).astype(np.float32)
+    print(f'PCA(whiten) {C} -> {n_components}  explained variance: {pca.explained_variance_ratio_.sum():.3f}')
+    return out, pca
+
+
 def apply_pca(hsi: np.ndarray, n_components: int):
     H, W, C = hsi.shape
     flat = hsi.reshape(-1, C)

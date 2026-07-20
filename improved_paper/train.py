@@ -34,8 +34,10 @@ from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
 
 from improved_paper.config import CONFIGS
-from improved_paper.preprocessing import load_dataset, apply_pca, remove_pca_outliers
-from improved_paper.dataset import get_dataloaders
+from improved_paper.preprocessing import (
+    load_dataset, apply_pca, remove_pca_outliers, load_split_dataset, preprocess_scmt,
+)
+from improved_paper.dataset import get_dataloaders, get_dataloaders_fixed
 from improved_paper.utils import compute_metrics, evaluate, get_run_dir, get_seed_dir, detect_accelerator
 from improved_paper.model import TCFormerLit, EpochLogger
 
@@ -58,6 +60,15 @@ def parse_args():
     p.add_argument('--data_path', default='data')
     p.add_argument('--paper_mode', action='store_true',
                    help='No val split — test set used as eval during training')
+
+    # ── SCMT-parity data / fast eval ───────────────────────────────────────────
+    p.add_argument('--scmt-split', dest='scmt_split', action='store_true',
+                   help='Train on the SCMT authors fixed split + SCMT preprocessing (IP only)')
+    p.add_argument('--scmt-split-path', dest='scmt_split_path',
+                   default='SCMT/data/Indian/Indian_10_1_split.mat',
+                   help='Path to the SCMT split .mat (input/TR/TE)')
+    p.add_argument('--final-eval-only', dest='final_eval_only', action='store_true',
+                   help='SCMT-style: no per-epoch validation, evaluate on test once at the end (final-epoch model)')
 
     # ── Ablation toggles (point-wise disable of each new layer/trick) ──────────
     g = p.add_argument_group('ablation toggles')
@@ -87,6 +98,9 @@ def apply_overrides(cfg, args):
     if args.paper_mode:
         cfg.num_val_per_class = 0
 
+    cfg.use_scmt_split  = args.scmt_split
+    cfg.final_eval_only = args.final_eval_only
+
     if args.mixing          is not None: cfg.mixing_impl           = args.mixing
     if args.center          is not None: cfg.center_attn           = args.center
     if args.multiscale_stem is not None: cfg.use_multiscale_stem   = args.multiscale_stem
@@ -101,39 +115,27 @@ def apply_overrides(cfg, args):
     return cfg
 
 
-def train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels):
+def train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels, fixed_split=None):
     L.seed_everything(seed, workers=True)
     seed_dir = get_seed_dir(run_dir, seed)
     print(f'\n── Seed {seed} → {seed_dir} ──')
 
-    train_loader, val_loader, test_loader = get_dataloaders(hsi_pca, labels, cfg)
+    if fixed_split is not None:
+        TR, TE = fixed_split
+        train_loader, val_loader, test_loader = get_dataloaders_fixed(hsi_pca, labels, TR, TE, cfg)
+    else:
+        train_loader, val_loader, test_loader = get_dataloaders(hsi_pca, labels, cfg)
 
-    if args.paper_mode:
+    if args.paper_mode and val_loader is None:
         val_loader = test_loader
-        print('paper_mode: val split disabled — test set used as eval during training')
 
     lit = TCFormerLit(cfg)
     accelerator, _ = detect_accelerator()
 
-    checkpoint_cb = ModelCheckpoint(
-        dirpath=seed_dir / 'checkpoints',
-        monitor='val_OA',
-        mode='max',
-        save_top_k=1,
-        filename='best-{epoch:03d}-{val_OA:.4f}',
-        verbose=False,
-    )
-    callbacks = [
-        checkpoint_cb,
-        EarlyStopping(monitor='val_OA', mode='max', patience=cfg.patience, verbose=False),
-        EpochLogger(args.log_every),
-    ]
-
-    trainer = L.Trainer(
+    common_trainer_kwargs = dict(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
         devices=1,
-        callbacks=callbacks,
         logger=CSVLogger(save_dir=str(seed_dir), name='', version=''),
         log_every_n_steps=1,
         enable_progress_bar=False,
@@ -141,18 +143,45 @@ def train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels):
         num_sanity_val_steps=0,
     )
 
-    mode_label = 'paper_mode (test as eval)' if args.paper_mode else f'patience={cfg.patience}'
-    print(f'Training {args.dataset} | max {cfg.epochs} epochs | {mode_label}')
-    trainer.fit(lit, train_loader, val_loader)
+    if args.final_eval_only:
+        # SCMT-style: no per-epoch validation; evaluate final-epoch model on test once.
+        print(f'Training {args.dataset} | {cfg.epochs} epochs | final-eval-only (test measured once at end)')
+        trainer = L.Trainer(
+            callbacks=[EpochLogger(args.log_every, train_only=True)],
+            limit_val_batches=0,
+            **common_trainer_kwargs,
+        )
+        trainer.fit(lit, train_loader)
+        _, dev = detect_accelerator()
+        lit.model.to(dev)
+    else:
+        # Best-checkpoint selection by val_OA (val = held-out val, or test in paper_mode).
+        if val_loader is None:
+            val_loader = test_loader  # nothing to validate on → use test (paper-style)
+        checkpoint_cb = ModelCheckpoint(
+            dirpath=seed_dir / 'checkpoints',
+            monitor='val_OA', mode='max', save_top_k=1,
+            filename='best-{epoch:03d}-{val_OA:.4f}', verbose=False,
+        )
+        trainer = L.Trainer(
+            callbacks=[
+                checkpoint_cb,
+                EarlyStopping(monitor='val_OA', mode='max', patience=cfg.patience, verbose=False),
+                EpochLogger(args.log_every),
+            ],
+            **common_trainer_kwargs,
+        )
+        mode_label = 'paper_mode (test as eval)' if args.paper_mode else f'patience={cfg.patience}'
+        print(f'Training {args.dataset} | max {cfg.epochs} epochs | {mode_label}')
+        trainer.fit(lit, train_loader, val_loader)
 
-    best_oa = float(checkpoint_cb.best_model_score) if checkpoint_cb.best_model_score else 0.0
-    print(f'Best val_OA={best_oa:.4f}  →  {checkpoint_cb.best_model_path}')
-
-    print('Loading best checkpoint for test evaluation...')
-    ckpt = torch.load(checkpoint_cb.best_model_path, map_location='cpu', weights_only=False)
-    lit.load_state_dict(ckpt['state_dict'])
-    _, dev = detect_accelerator()
-    lit.model.to(dev)
+        best_oa = float(checkpoint_cb.best_model_score) if checkpoint_cb.best_model_score else 0.0
+        print(f'Best val_OA={best_oa:.4f}  →  {checkpoint_cb.best_model_path}')
+        print('Loading best checkpoint for test evaluation...')
+        ckpt = torch.load(checkpoint_cb.best_model_path, map_location='cpu', weights_only=False)
+        lit.load_state_dict(ckpt['state_dict'])
+        _, dev = detect_accelerator()
+        lit.model.to(dev)
 
     preds, trues = evaluate(lit.model, test_loader)
     m = compute_metrics(preds, trues, cfg.num_classes)
@@ -228,7 +257,13 @@ def main():
     cfg = CONFIGS[args.dataset]
     cfg = apply_overrides(cfg, args)
 
+    if args.scmt_split and args.dataset != 'IP':
+        raise SystemExit('--scmt-split is only available for --dataset IP '
+                         '(only Indian_10_1_split.mat is provided).')
+
     suffix  = '_paper' if args.paper_mode else ''
+    if args.scmt_split:
+        suffix += '_scmtsplit'
     run_dir = get_run_dir(f'improved_paper{suffix}_{args.dataset}', results_root=args.results)
     print(f'\nRun directory: {run_dir}')
     with open(run_dir / 'config.json', 'w') as f:
@@ -238,17 +273,24 @@ def main():
     print(f'Toggles: mixing={cfg.mixing_impl} center={cfg.center_attn} '
           f'multiscale={cfg.use_multiscale_stem} se={cfg.use_se_block} pos={cfg.use_pos_encoding} '
           f'biwkv={cfg.use_bidirectional_wkv} fps={cfg.use_fps} aug={cfg.use_augmentation} '
-          f'outliers={cfg.remove_pca_outliers} ls={cfg.label_smoothing} cosine={cfg.use_cosine_schedule}')
+          f'outliers={cfg.remove_pca_outliers} ls={cfg.label_smoothing} cosine={cfg.use_cosine_schedule} '
+          f'scmt_split={cfg.use_scmt_split} final_eval_only={cfg.final_eval_only}')
 
-    hsi, labels = load_dataset(cfg.dataset, cfg.data_path)
-    hsi_pca, _  = apply_pca(hsi, cfg.pca_components)
-    if cfg.remove_pca_outliers:
-        labels = remove_pca_outliers(labels, hsi_pca, cfg.outlier_std)
+    fixed_split = None
+    if args.scmt_split:
+        hsi, labels, TR, TE = load_split_dataset(args.scmt_split_path)
+        hsi_pca, _ = preprocess_scmt(hsi, cfg.pca_components)
+        fixed_split = (TR, TE)
+    else:
+        hsi, labels = load_dataset(cfg.dataset, cfg.data_path)
+        hsi_pca, _  = apply_pca(hsi, cfg.pca_components)
+        if cfg.remove_pca_outliers:
+            labels = remove_pca_outliers(labels, hsi_pca, cfg.outlier_std)
 
     seed_results = []
     for seed in args.seeds:
         cfg.seed = seed
-        seed_results.append(train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels))
+        seed_results.append(train_one_seed(seed, run_dir, args, cfg, hsi_pca, labels, fixed_split))
 
     agg = aggregate(seed_results, args.seeds, args.dataset, args.paper_mode)
     with open(run_dir / 'test_metrics.json', 'w') as f:

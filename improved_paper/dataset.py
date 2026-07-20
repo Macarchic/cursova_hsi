@@ -188,3 +188,30 @@ def get_dataloaders(hsi_pca: np.ndarray, labels: np.ndarray, cfg):
     val_loader   = DataLoader(val_ds,   batch_size=cfg.batch_size, shuffle=False, num_workers=0)
     test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=0)
     return train_loader, val_loader, test_loader
+
+
+def get_dataloaders_fixed(hsi_pca: np.ndarray, labels: np.ndarray, TR: np.ndarray, TE: np.ndarray, cfg):
+    """Build loaders from a fixed train/test split (SCMT authors' TR/TE masks).
+
+    No validation set (SCMT-style); FPS and outlier removal are irrelevant here.
+    Returns (train_loader, None, test_loader).
+    """
+    train_idx = np.argwhere(TR > 0)
+    test_idx  = np.argwhere(TE > 0)
+    print(f'Split (SCMT fixed) — Train: {len(train_idx)}  Test: {len(test_idx)}')
+
+    train_aug = None
+    if getattr(cfg, 'use_augmentation', True):
+        train_aug = ComposeAugmentations([
+            SpectralJitter(scale=0.1),
+            BandDropout(p=0.15),
+            SpatialFlip(),
+            PatchRotation(),
+        ])
+
+    train_ds = HSIPatchDataset(hsi_pca, labels, train_idx, cfg.patch_size, augment=train_aug)
+    test_ds  = HSIPatchDataset(hsi_pca, labels, test_idx,  cfg.patch_size)
+
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=0)
+    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=0)
+    return train_loader, None, test_loader

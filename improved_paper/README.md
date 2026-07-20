@@ -36,6 +36,19 @@ python -m improved_paper.train --dataset PU --seeds 0 1 2 --paper_mode
 
 ¹ `use_bidirectional_wkv` діє лише при `mixing_impl='improved'` (WKV — це improved-реалізація; при `'scmt'` ігнорується).
 
+## Режими даних / швидкість
+
+| Прапорець | Що робить |
+|---|---|
+| `--scmt-split` | Тренування на **фіксованому спліті авторів SCMT** (`Indian_10_1_split.mat`: `input` 220 каналів, маски `TR`/`TE`) + SCMT-препроцесинг (max-min норма + `PCA(whiten=True)`). Дає дані 1:1 з авторами для чесного порівняння. **Лише IP.** Шлях: `--scmt-split-path` (дефолт `SCMT/data/Indian/Indian_10_1_split.mat`). |
+| `--final-eval-only` | SCMT-стиль: **без валідації щоепохи**, тест міряється **один раз у кінці** на моделі фінальної епохи. Швидко (немає eval на ~10k патчів щоепохи). |
+
+Максимальна парність з авторами SCMT:
+```bash
+python -m improved_paper.train --dataset IP --scmt-split --final-eval-only
+```
+(той самий спліт + той самий препроцесинг + фінальна модель на тесті). Порівнюй з `SCMT/` при вимкнених покращеннях, щоб ізолювати внесок моделі.
+
 ## Крайні конфігурації
 
 ```bash
