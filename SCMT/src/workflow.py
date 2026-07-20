@@ -21,12 +21,6 @@ def train_by_param(param):
 
 include_path = [
 'scmtformer.json',
-'scmtformer.json',
-'scmtformer.json',
-'scmtformer.json',
-'scmtformer.json',
-'scmtformer.json',
-
 ]
 def run_all():
     save_path_prefix = DEFAULT_RES_SAVE_PATH_PREFIX

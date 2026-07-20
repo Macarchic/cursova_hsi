@@ -5,9 +5,11 @@ import torch
 import platform
 
 # 设置设备
-device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-config_path_prefix = "D:\python\SCMT\src\params_use"
+# 跨平台路径：相对于本文件所在目录，Linux/macOS/Windows 通用
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+config_path_prefix = os.path.join(_BASE_DIR, "params_use")
 
 def check_convention(name):
     for a in ['knn', 'random_forest', 'svm']:
@@ -70,9 +72,11 @@ class HSIRecoder(object):
 
     def to_file(self, path):
         time_str = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))
-        # 动态生成保存路径
+        # 动态生成保存路径（跨平台，相对于本文件所在目录）
         data_file = self.record_data.get('param', {}).get('data', {}).get('data_file', 'UnknownDataset')
-        save_path_json = r"D:/python/SCMT/src/res/{}_test_{}.json".format(data_file, time_str)
+        res_dir = os.path.join(_BASE_DIR, "res")
+        os.makedirs(res_dir, exist_ok=True)
+        save_path_json = os.path.join(res_dir, "{}_test_{}.json".format(data_file, time_str))
 
         ss = json.dumps(self.record_data, indent=4)
         with open(save_path_json, 'w') as fout:
