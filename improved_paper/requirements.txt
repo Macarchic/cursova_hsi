@@ -1,0 +1,5 @@
+torch
+lightning
+numpy
+scipy
+scikit-learn
